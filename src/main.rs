@@ -32,6 +32,10 @@ struct NeedleCounter {
     // After each `write()` call, `prev_buffer.len() - prev_buffer_cut` is at most `needle.len() - 1`
     prev_buffer_cut: usize,
 
+    // For holding intermediate data.
+    // We keep it around so we don't have to keep allocating it.
+    tmp_buf: Vec<u8>,
+
     // The searcher we use to find needles.
     finder: Finder<'static>,
 }
@@ -44,6 +48,7 @@ impl NeedleCounter {
             // Invariant: the buffer does not contain any instance of the needle.
             prev_buffer: Vec::new(),
             prev_buffer_cut: 0,
+            tmp_buf: Vec::new(),
             finder: Finder::new(needle).into_owned(),
         }
     }
@@ -59,15 +64,16 @@ impl NeedleCounter {
         // the previous buffer and the first n bytes of the current buffer.
         let x = &self.prev_buffer[self.prev_buffer_cut..];
         let x_len = x.len();
-        let y_len = (2 * n -1 - x.len()).min(buf.len());
+        let y_len = (2 * n - 1 - x.len()).min(buf.len());
         let y = &buf[..y_len];
-        let mut z = Vec::from(x);
-        z.extend(y);
-        assert!(z.len() <= 2 * n - 1);
+        self.tmp_buf.clear();
+        self.tmp_buf.extend(x);
+        self.tmp_buf.extend(y);
+        assert!(self.tmp_buf.len() <= 2 * n - 1);
 
         // See if z contains a needle.
         // By construction, z contains at most one needle.
-        let next_buffer_cut = self.find_in(&z) - x_len;
+        let next_buffer_cut = self.find_in_tmp_buf() - x_len;
 
         // Now we can search the rest of the new buffer for the needle.
         let next_buffer_cut = self.find_in(&buf[next_buffer_cut..]) + next_buffer_cut;
@@ -87,6 +93,22 @@ impl NeedleCounter {
         let n = self.needle.len();
         let mut x = buf.len() - n + 1;
         for i in self.finder.find_iter(buf) {
+            self.count += 1;
+            x = x.max(i + n);
+        }
+        x
+    }
+
+    // Count needles in the temporary buffer.
+    // Returns the largest index i such that tmp_buf[..i] does not contain any needles.
+    fn find_in_tmp_buf(&mut self) -> usize {
+        if self.tmp_buf.len() < self.needle.len() {
+            return 0;
+        }
+
+        let n = self.needle.len();
+        let mut x = self.tmp_buf.len() - n + 1;
+        if let Some(i) = self.finder.find(&self.tmp_buf) {
             self.count += 1;
             x = x.max(i + n);
         }
