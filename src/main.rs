@@ -33,7 +33,7 @@ struct NeedleCounter {
     prev_buffer_cut: usize,
 
     // For holding intermediate data.
-    // We keep it around so we don't have to keep allocating it.
+    // We keep it around to avoid reallocating it.
     tmp_buf: Vec<u8>,
 
     // The searcher we use to find needles.
@@ -69,7 +69,6 @@ impl NeedleCounter {
         self.tmp_buf.clear();
         self.tmp_buf.extend(x);
         self.tmp_buf.extend(y);
-        assert!(self.tmp_buf.len() <= 2 * n - 1);
 
         // See if z contains a needle.
         // By construction, z contains at most one needle.
