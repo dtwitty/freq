@@ -101,15 +101,17 @@ impl NeedleCounter {
     // Count needles in the temporary buffer.
     // Returns the largest index i such that tmp_buf[..i] does not contain any needles.
     fn find_in_tmp_buf(&mut self) -> usize {
-        if self.tmp_buf.len() < self.needle.len() {
-            return 0;
-        }
-
+        // Here we can take advantage of the fact that the tmp buffer is at most 2 * n - 1 bytes long.
+        // It follows:
+        //  - The tmp buffer contains at most one needle.
+        //  - That needle must be in the first (t - n) bytes of the tmp buffer.
         let n = self.needle.len();
-        let mut x = self.tmp_buf.len() - n + 1;
-        if let Some(i) = self.finder.find(&self.tmp_buf) {
-            self.count += 1;
-            x = x.max(i + n);
+        let x = self.tmp_buf.len() - n + 1;
+        for i in 0..self.tmp_buf.len() - n {
+            if self.tmp_buf[i..].starts_with(&self.needle) {
+                self.count += 1;
+                return x.max(i + n);
+            }
         }
         x
     }
