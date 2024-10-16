@@ -1,11 +1,10 @@
 use clap::Parser;
+use crossbeam_channel::Receiver;
 use memchr::memmem::Finder;
-use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{stdin, Read};
 use std::path::PathBuf;
-use crossbeam_channel::Receiver;
 
 #[derive(Parser, Clone)]
 struct Args {
@@ -19,25 +18,32 @@ struct Args {
 }
 
 struct NeedleCounter {
+    // The needle we are looking for.
     needle: Vec<u8>,
-    buffer_size: usize,
+
+    // How many needles we have found.
     count: usize,
-    buffer: VecDeque<u8>,
+
+    // The previous buffer we searched.
+    prev_buffer: Vec<u8>,
+
+    // How far into the previous buffer we are sure contains no needles.
+    // That is, prev_buffer[..prev_buffer_cut] does not contain any needles.
+    // After each `write()` call, `prev_buffer.len() - prev_buffer_cut` is at most `needle.len() - 1`
+    prev_buffer_cut: usize,
+
+    // The searcher we use to find needles.
     finder: Finder<'static>,
 }
 
 impl NeedleCounter {
-    pub fn new(needle: &[u8], buffer_size: usize) -> Self {
-        if needle.len() > buffer_size {
-            panic!("needle is longer than buffer_size");
-        }
-
+    pub fn new(needle: &[u8]) -> Self {
         NeedleCounter {
-            buffer_size,
             needle: needle.to_vec(),
             count: 0,
             // Invariant: the buffer does not contain any instance of the needle.
-            buffer: VecDeque::with_capacity(buffer_size),
+            prev_buffer: Vec::new(),
+            prev_buffer_cut: 0,
             finder: Finder::new(needle).into_owned(),
         }
     }
@@ -46,34 +52,45 @@ impl NeedleCounter {
         self.count
     }
 
-    fn write(&mut self, buf: &[u8]) {
-        let mut buf = buf;
-        while !buf.is_empty() {
-            // Take a chunk out of the haystack up to the maximum buffer size.
-            let chunk_size = self
-                .buffer_size
-                .saturating_sub(self.buffer.len())
-                .min(buf.len());
-            let (chunk, rest) = buf.split_at(chunk_size);
-            buf = rest;
+    fn write(&mut self, buf: Vec<u8>) {
+        let n = self.needle.len();
 
-            // Append the chunk to the buffer.
-            self.buffer.extend(chunk);
+        // Construct z, which has length 2 * n - 1, and is the concatenation of the last bytes of
+        // the previous buffer and the first n bytes of the current buffer.
+        let x = &self.prev_buffer[self.prev_buffer_cut..];
+        let x_len = x.len();
+        let y_len = (2 * n -1 - x.len()).min(buf.len());
+        let y = &buf[..y_len];
+        let mut z = Vec::from(x);
+        z.extend(y);
+        assert!(z.len() <= 2 * n - 1);
 
-            // Push everything in the buffer to the front.
-            self.buffer.make_contiguous();
+        // See if z contains a needle.
+        // By construction, z contains at most one needle.
+        let next_buffer_cut = self.find_in(&z) - x_len;
 
-            let (buffer, _) = self.buffer.as_slices();
+        // Now we can search the rest of the new buffer for the needle.
+        let next_buffer_cut = self.find_in(&buf[next_buffer_cut..]) + next_buffer_cut;
 
-            // Search for the needle in the buffer.
-            let n = self.needle.len();
-            let mut cut_at = buffer.len().saturating_sub(n);
-            for i in self.finder.find_iter(buffer) {
-                self.count += 1;
-                cut_at = cut_at.max(i + n);
-            }
-            self.buffer.drain(..cut_at);
+        // Update the previous buffer.
+        self.prev_buffer = buf;
+        self.prev_buffer_cut = next_buffer_cut;
+    }
+
+    // Count needles in the buffer.
+    // Returns the largest index i such that buf[..i] does not contain any needles.
+    fn find_in(&mut self, buf: &[u8]) -> usize {
+        if buf.len() < self.needle.len() {
+            return 0;
         }
+
+        let n = self.needle.len();
+        let mut x = buf.len() - n + 1;
+        for i in self.finder.find_iter(buf) {
+            self.count += 1;
+            x = x.max(i + n);
+        }
+        x
     }
 }
 
@@ -117,19 +134,20 @@ fn main() {
 
     let r = match args.input {
         Some(f) if f != PathBuf::from("-") => {
-            let f = File::open(f.clone()).expect(format!("failed to open {}", f.display()).as_str());
+            let f =
+                File::open(f.clone()).expect(format!("failed to open {}", f.display()).as_str());
             read_chunks(f, args.buffer_size)
         }
         _ => {
             let stdin = stdin();
-            read_chunks(stdin, args.buffer_size)
+            read_chunks(stdin, args.buffer_size - needle.len())
         }
     };
 
     // Counting happens in this thread.
-    let mut counter = NeedleCounter::new(needle, args.buffer_size);
+    let mut counter = NeedleCounter::new(needle);
     while let Ok(v) = r.recv() {
-        counter.write(&v);
+        counter.write(v);
     }
     println!("{}", counter.count());
 }
@@ -141,37 +159,35 @@ mod tests {
     #[test]
     fn test_needle_counter() {
         let needle = b"needle";
-        let buffer_size = 10;
-        let mut counter = NeedleCounter::new(needle, buffer_size);
+        let mut counter = NeedleCounter::new(needle);
 
-        counter.write(b"haystackneedle");
+        counter.write(b"haystackneedle".to_vec());
         assert_eq!(counter.count(), 1);
 
-        counter.write(b"haystackneedlehaystackneedle");
+        counter.write(b"haystackneedlehaystackneedle".to_vec());
         assert_eq!(counter.count(), 3);
 
-        counter.write(b"haystackneedlehaystackneedlehaystackneedle");
+        counter.write(b"haystackneedlehaystackneedlehaystackneedle".to_vec());
         assert_eq!(counter.count(), 6);
 
-        counter.write(b"haystackneedlehaystackneedlehaystackneedlehaystackneedle");
+        counter.write(b"haystackneedlehaystackneedlehaystackneedlehaystackneedle".to_vec());
         assert_eq!(counter.count(), 10);
 
-        counter.write(b"need");
+        counter.write(b"need".to_vec());
         assert_eq!(counter.count(), 10);
 
-        counter.write(b"le");
+        counter.write(b"le".to_vec());
         assert_eq!(counter.count(), 11);
     }
 
     #[test]
     fn test_needle_counter_overlap() {
         let needle = "aba";
-        let buffer_size = 20;
 
-        let mut counter = NeedleCounter::new(needle.as_bytes(), buffer_size);
+        let mut counter = NeedleCounter::new(needle.as_bytes());
 
         for i in 1..1000 {
-            counter.write(b"ab");
+            counter.write(b"ab".to_vec());
             assert_eq!(counter.count(), i / 2);
         }
     }
