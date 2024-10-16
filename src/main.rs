@@ -162,7 +162,7 @@ fn main() {
         }
         _ => {
             let stdin = stdin();
-            read_chunks(stdin, args.buffer_size - needle.len())
+            read_chunks(stdin, args.buffer_size)
         }
     };
 
