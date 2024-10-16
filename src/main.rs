@@ -1,5 +1,6 @@
 use clap::Parser;
 use crossbeam_channel::Receiver;
+use memchr::memchr_iter;
 use memchr::memmem::Finder;
 use std::ffi::OsString;
 use std::fs::File;
@@ -72,7 +73,8 @@ impl NeedleCounter {
 
         // See if z contains a needle.
         // By construction, z contains at most one needle.
-        let next_buffer_cut = self.find_in_tmp_buf() - x_len;
+        let cut = self.find_in_tmp_buf();
+        let next_buffer_cut = cut - x_len;
 
         // Now we can search the rest of the new buffer for the needle.
         let next_buffer_cut = self.find_in(&buf[next_buffer_cut..]) + next_buffer_cut;
@@ -106,14 +108,19 @@ impl NeedleCounter {
         //  - The tmp buffer contains at most one needle.
         //  - That needle must be in the first (t - n) bytes of the tmp buffer.
         let n = self.needle.len();
-        let x = self.tmp_buf.len() - n + 1;
-        for i in 0..self.tmp_buf.len() - n {
+        let l = self.tmp_buf.len().saturating_sub(n) + 1;
+
+        if self.tmp_buf.len() < self.needle.len() {
+            return 0;
+        }
+
+        for i in memchr_iter(self.needle[0], &self.tmp_buf[..l]) {
             if self.tmp_buf[i..].starts_with(&self.needle) {
                 self.count += 1;
-                return x.max(i + n);
+                return l.max(i + n);
             }
         }
-        x
+        l
     }
 }
 
