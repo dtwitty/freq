@@ -188,7 +188,6 @@ dependencies = [
  "itertools",
  "memchr",
  "proptest",
- "tempfile",
 ]
 
 [[package]]

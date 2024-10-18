@@ -1,10 +1,9 @@
+extern crate core;
+
 use clap::Parser;
 use crossbeam_channel::Receiver;
 use memchr::memchr_iter;
 use memchr::memmem::{find_iter, Finder};
-use proptest::prelude::ProptestConfig;
-use proptest::string::bytes_regex;
-use proptest::{prop_assert_eq, proptest};
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{stdin, Read};
@@ -37,8 +36,6 @@ struct NeedleCounter {
     finder: Finder<'static>,
 }
 
-const DEBUG: bool = false;
-
 impl NeedleCounter {
     pub fn new(needle: &[u8]) -> Self {
         NeedleCounter {
@@ -56,7 +53,7 @@ impl NeedleCounter {
     fn write(&mut self, buf: Vec<u8>) {
         let n = self.needle.len();
 
-        // Fast case - if the needle has length 1, we can use SIMD masking for a super fast count.
+        // Fast case - if the needle has length 1 we can use a simd loop.
         if n == 1 {
             let b = self.needle[0];
             self.count += buf.iter().filter(|&&x| x == b).count();
@@ -69,27 +66,7 @@ impl NeedleCounter {
         // The number of bytes in the buffer that we have moved to the tmp buffer.
         let mut num_buf_bytes = 0;
 
-        if DEBUG {
-            println!(
-                "-0: count: {}, to_remove: {}, num_buf_bytes: {}, tmp_buf: {:?}, buf: {:?}",
-                self.count,
-                to_remove,
-                num_buf_bytes,
-                self.tmp_buf,
-                &buf[num_buf_bytes..]
-            );
-        }
         while to_remove > 0 && num_buf_bytes < buf.len() {
-            if DEBUG {
-                println!(
-                    "-1: count: {}, to_remove: {}, num_buf_bytes: {}, tmp_buf: {:?}, buf: {:?}",
-                    self.count,
-                    to_remove,
-                    num_buf_bytes,
-                    self.tmp_buf,
-                    &buf[num_buf_bytes..]
-                );
-            }
             // Add into the tmp buffer until it is at most 2 * n - 1 bytes long.
             let x_len = self.tmp_buf.len();
             let num_buf_bytes_left = buf.len() - num_buf_bytes;
@@ -97,37 +74,14 @@ impl NeedleCounter {
             let y = &buf[num_buf_bytes..num_buf_bytes + y_len];
             num_buf_bytes += y.len();
             self.tmp_buf.extend(y);
-            if DEBUG {
-                println!(
-                    "-2: count: {}, to_remove: {}, num_buf_bytes: {}, tmp_buf: {:?}, buf: {:?}",
-                    self.count,
-                    to_remove,
-                    num_buf_bytes,
-                    self.tmp_buf,
-                    &buf[num_buf_bytes..]
-                );
-            }
 
             // Check for a needle in the tmp buffer.
             // This will also count the needle if it is there.
             let cut = self.find_in_tmp_buf();
-            if DEBUG {
-                println!("cut: {}", cut);
-            }
 
             // Remove any bytes that are before the next needle.
             self.tmp_buf.drain(..cut);
             to_remove = to_remove.saturating_sub(cut);
-            if DEBUG {
-                println!(
-                    "-3: count: {}, to_remove: {}, num_buf_bytes: {}, tmp_buf: {:?}, buf: {:?}",
-                    self.count,
-                    to_remove,
-                    num_buf_bytes,
-                    self.tmp_buf,
-                    &buf[num_buf_bytes..]
-                );
-            }
         }
 
         if num_buf_bytes == buf.len() {
@@ -141,13 +95,6 @@ impl NeedleCounter {
 
         // Move the rest of the buffer to the temporary buffer.
         self.tmp_buf.extend(&buf[next_buffer_cut..]);
-
-        if DEBUG {
-            println!(
-                "-4: count: {}, to_remove: {}, num_buf_bytes: {}, tmp_buf: {:?}, buf: []",
-                self.count, to_remove, num_buf_bytes, self.tmp_buf
-            );
-        }
     }
 
     // Count needles in the buffer.
@@ -166,7 +113,7 @@ impl NeedleCounter {
         x
     }
 
-    // Count needles in the temporary buffer.
+    // Count needles in the temporary buffer, exploiting its construction.
     // Returns the largest index i such that tmp_buf[..i] does not contain any needles.
     fn find_in_tmp_buf(&mut self) -> usize {
         // Here we can take advantage of the fact that the tmp buffer is at most 2 * n - 1 bytes long.
@@ -174,18 +121,48 @@ impl NeedleCounter {
         //  - The tmp buffer contains at most one needle.
         //  - That needle must be in the first (t - n) bytes of the tmp buffer.
         let n = self.needle.len();
-        let l = self.tmp_buf.len().saturating_sub(n - 1);
+        let mut l = self.tmp_buf.len().saturating_sub(n - 1);
 
+        if self.tmp_buf.len() < n {
+            // There is certainly no needle here because the tmp buffer is too short.
+            // Skip to the next possible prefix.
+            for i in memchr_iter(self.needle[0], &self.tmp_buf) {
+                if self.needle.starts_with(&self.tmp_buf[i..]) {
+                    // We found a prefix of the needle.
+                    return i;
+                }
+            }
+
+            // We didn't find a prefix of the needle.
+            // We can skip the entire tmp buffer.
+            return self.tmp_buf.len();
+        }
+
+        // We use memchr instead of the finder here because the tmp buf isn't very large.
         for i in memchr_iter(self.needle[0], &self.tmp_buf[..l]) {
             if self.tmp_buf[i..].starts_with(&self.needle) {
                 // We found a needle!
                 self.count += 1;
-                return l.max(i + n);
+
+                // We can skip to the next possible needle.
+                // The next loop will handle that.
+                l = l.max(i + n);
+                break;
             }
         }
 
-        // We didn't find a needle.
-        l
+        // Try to find a prefix of the needle in the un-searched part of the tmp buffer.
+        for i in memchr_iter(self.needle[0], &self.tmp_buf[l..]) {
+            if self.needle.starts_with(&self.tmp_buf[l + i..]) {
+                // We found a prefix of the needle, but we can't prove anything beyond that.
+                // We can't prove that it
+                return l + i;
+            }
+        }
+
+        // We didn't find a prefix of the needle.
+        // We can skip the entire tmp buffer.
+        self.tmp_buf.len()
     }
 }
 
@@ -250,59 +227,50 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn test_count() {
-        let chunk_size = 1;
-        let needle = [97, 97, 97];
-        let haystack = [97, 97, 97];
 
-        let mut counter = NeedleCounter::new(&needle);
+    use memchr::memmem::find_iter;
+    use proptest::prelude::ProptestConfig;
+    use proptest::string::bytes_regex;
+    use proptest::{prop_assert_eq, proptest};
 
-        haystack.chunks(chunk_size).for_each(|chunk| {
-            counter.write(chunk.to_vec());
-        });
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: 1 << 15,
+            .. ProptestConfig::default()
+        })]
 
-        let expected = find_iter(&haystack, &needle).count();
-        assert_eq!(counter.count(), expected);
-    }
-}
+        #[test]
+        fn test_count(
+            chunk_size in 1..100_usize,
+            needle in bytes_regex("((?s-u:.{1,100}))").unwrap(),
+            haystack in bytes_regex("((?s-u:.{0,1000}))").unwrap()
+        ) {
+            let mut counter = NeedleCounter::new(&needle);
 
-proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 1024, .. ProptestConfig::default()
-    })]
-
-    #[test]
-    fn test_count(
-        chunk_size in 1..100_usize,
-        needle in bytes_regex("((?s-u:.{1,100}))").unwrap(),
-        haystack in bytes_regex("((?s-u:.{0,1000}))").unwrap()
-    ) {
-        let mut counter = NeedleCounter::new(&needle);
-
-        haystack.chunks(chunk_size).for_each(|chunk| {
-            counter.write(chunk.to_vec());
-        });
+            haystack.chunks(chunk_size).for_each(|chunk| {
+                counter.write(chunk.to_vec());
+            });
 
 
-        let expected = find_iter(&haystack, &needle).count();
-        assert_eq!(counter.count(), expected);
-    }
+            let expected = find_iter(&haystack, &needle).count();
+            assert_eq!(counter.count(), expected);
+        }
 
-    #[test]
-    fn test_aba(
-        chunk_size in 1..100_usize,
-        needle in bytes_regex("((?s-u:[ab]{1,10}))").unwrap(),
-        haystack in bytes_regex("((?s-u:[ab]{0,1000}))").unwrap()
-    ) {
-        let mut counter = NeedleCounter::new(&needle);
+        #[test]
+        fn test_aba(
+            chunk_size in 1..100_usize,
+            needle in bytes_regex("((?s-u:[ab]{1,10}))").unwrap(),
+            haystack in bytes_regex("((?s-u:[ab]{0,1000}))").unwrap()
+        ) {
+            let mut counter = NeedleCounter::new(&needle);
 
-        haystack.chunks(chunk_size).for_each(|chunk| {
-            counter.write(chunk.to_vec());
-        });
+            haystack.chunks(chunk_size).for_each(|chunk| {
+                counter.write(chunk.to_vec());
+            });
 
 
-        let expected = find_iter(&haystack, &needle).count();
-        prop_assert_eq!(counter.count(), expected);
+            let expected = find_iter(&haystack, &needle).count();
+            prop_assert_eq!(counter.count(), expected);
+        }
     }
 }
