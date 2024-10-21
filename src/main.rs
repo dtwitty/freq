@@ -119,7 +119,17 @@ impl NeedleCounter {
             self.count += 1;
             x = x.max(i + n);
         }
-        x
+
+        // We have found all needles. Now try to push even further by moving to the next potential
+        // prefix.
+        for i in memchr_iter(self.needle[0], &buf[x..]) {
+            if self.needle.starts_with(&buf[x + i..]) {
+                return x + i;
+            }
+        }
+
+        // We have shown that there is no prefix of the needle in the rest of the buffer.
+        buf.len()
     }
 
     // Count needles in the temporary buffer, exploiting its construction.
