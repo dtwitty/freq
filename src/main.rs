@@ -120,16 +120,7 @@ impl NeedleCounter {
             x = x.max(i + n);
         }
 
-        // We have found all needles. Now try to push even further by moving to the next potential
-        // prefix.
-        for i in memchr_iter(self.needle[0], &buf[x..]) {
-            if self.needle.starts_with(&buf[x + i..]) {
-                return x + i;
-            }
-        }
-
-        // We have shown that there is no prefix of the needle in the rest of the buffer.
-        buf.len()
+        first_possible_prefix(&self.needle, &buf[x..]) + x
     }
 
     // Count needles in the temporary buffer, exploiting its construction.
@@ -143,18 +134,7 @@ impl NeedleCounter {
         let mut l = self.tmp_buf.len().saturating_sub(n - 1);
 
         if self.tmp_buf.len() < n {
-            // There is certainly no needle here because the tmp buffer is too short.
-            // Skip to the next possible prefix.
-            for i in memchr_iter(self.needle[0], &self.tmp_buf) {
-                if self.needle.starts_with(&self.tmp_buf[i..]) {
-                    // We found a prefix of the needle.
-                    return i;
-                }
-            }
-
-            // We didn't find a prefix of the needle.
-            // We can skip the entire tmp buffer.
-            return self.tmp_buf.len();
+            return first_possible_prefix(&self.needle, &self.tmp_buf);
         }
 
         // We use memchr instead of the finder here because the tmp buf isn't very large.
@@ -170,19 +150,17 @@ impl NeedleCounter {
             }
         }
 
-        // Try to find a prefix of the needle in the un-searched part of the tmp buffer.
-        for i in memchr_iter(self.needle[0], &self.tmp_buf[l..]) {
-            if self.needle.starts_with(&self.tmp_buf[l + i..]) {
-                // We found a prefix of the needle, but we can't prove anything beyond that.
-                // We can't prove that it
-                return l + i;
-            }
-        }
-
-        // We didn't find a prefix of the needle.
-        // We can skip the entire tmp buffer.
-        self.tmp_buf.len()
+        first_possible_prefix(&self.needle, &self.tmp_buf[l..]) + l
     }
+}
+
+fn first_possible_prefix(needle: &[u8], buf: &[u8]) -> usize {
+    for i in memchr_iter(needle[0], buf) {
+        if needle.starts_with(&buf[i..]) {
+            return i;
+        }
+    }
+    buf.len()
 }
 
 fn get_uninit_vec<T>(len: usize) -> Vec<T> {
