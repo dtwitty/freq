@@ -156,17 +156,15 @@ impl NeedleCounter {
 
 pub fn first_possible_prefix(needle: &[u8], buf: &[u8]) -> usize {
     const N: usize = 16;
-    let mut m = buf.len();
-    for i in 0..buf.len() {
-        if buf[i..]
-            .chunks(N)
-            .zip(needle.chunks(N))
-            .all(|(x, y)| x.iter().zip(y).fold(true, |acc, (a, b)| acc & (a == b)))
-        {
-            m = m.min(i);
-        }
-    }
-    m
+    (0..buf.len())
+        .filter(|&i| {
+            buf[i..]
+                .chunks(N)
+                .zip(needle.chunks(N))
+                .all(|(x, y)| x.iter().zip(y).fold(true, |acc, (a, b)| acc & (a == b)))
+        })
+        .min()
+        .unwrap_or(buf.len())
 }
 
 fn get_uninit_vec<T>(len: usize) -> Vec<T> {
