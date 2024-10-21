@@ -1,22 +1,31 @@
 extern crate core;
 
-use clap::Parser;
+use clap::error::ErrorKind;
+use clap::{CommandFactory, Parser};
 use crossbeam_channel::Receiver;
 use memchr::memchr_iter;
-use memchr::memmem::{find_iter, Finder};
+use memchr::memmem::Finder;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{stdin, Read};
 use std::path::PathBuf;
 
-#[derive(Parser, Clone)]
+#[derive(Parser)]
+#[command(version, about = "freq - count the occurrences of a literal pattern")]
 struct Args {
+    #[arg(required = true, help = "The pattern to search for.")]
+    /// The pattern to search for.
     pattern: OsString,
 
-    #[clap()]
-    input: Option<PathBuf>,
+    #[arg(help = "The files to search in. If not provided, stdin is used.")]
+    input: Vec<PathBuf>,
 
-    #[clap(short, long, default_value = "1048576")]
+    #[clap(
+        short,
+        long,
+        default_value = "1048576",
+        help = "The size of the buffer used to read the file. Larger buffers use more memory, but might be faster."
+    )]
     buffer_size: usize,
 }
 
@@ -174,26 +183,27 @@ fn get_uninit_vec<T>(len: usize) -> Vec<T> {
     v
 }
 
-fn read_chunks<R: Read + Send + 'static>(f: R, chunk_size: usize) -> Receiver<Vec<u8>> {
+fn read_chunks<R: Read + Send + 'static>(mut v: Vec<R>, chunk_size: usize) -> Receiver<Vec<u8>> {
     let (s, r) = crossbeam_channel::bounded(1);
     std::thread::spawn(move || {
-        let mut f = f;
-        loop {
-            // Get a buffer.
-            let mut v = get_uninit_vec(chunk_size);
+        v.iter_mut().for_each(|f| {
+            loop {
+                // Get a buffer.
+                let mut v = get_uninit_vec(chunk_size);
 
-            // Try to fill the buffer.
-            let bytes_read = f.read(&mut v).expect("failed to read");
+                // Try to fill the buffer.
+                let bytes_read = f.read(&mut v).expect("failed to read");
 
-            // If we read 0 bytes, we are done.
-            if bytes_read == 0 {
-                break;
+                // If we read 0 bytes, we are done.
+                if bytes_read == 0 {
+                    break;
+                }
+
+                // Send the buffer.
+                v.truncate(bytes_read);
+                s.send(v).expect("failed to send");
             }
-
-            // Send the buffer.
-            v.truncate(bytes_read);
-            s.send(v).expect("failed to send");
-        }
+        });
         // Sender drops.
     });
     r
@@ -203,17 +213,24 @@ fn main() {
     let args = Args::parse();
 
     let needle = args.pattern.as_encoded_bytes();
+    if needle.is_empty() {
+        let mut cmd = Args::command();
+        cmd.error(ErrorKind::ValueValidation, "Pattern must be non-empty")
+            .exit();
+    }
 
-    let r = match args.input {
-        Some(f) if f != PathBuf::from("-") => {
-            let f =
-                File::open(f.clone()).expect(format!("failed to open {}", f.display()).as_str());
-            read_chunks(f, args.buffer_size)
-        }
-        _ => {
-            let stdin = stdin();
-            read_chunks(stdin, args.buffer_size)
-        }
+    let r = if args.input.is_empty() {
+        let stdin = stdin();
+        read_chunks(vec![stdin], args.buffer_size)
+    } else {
+        let v = args
+            .input
+            .iter()
+            .map(|p| {
+                File::open(p.clone()).expect(format!("failed to open {}", p.display()).as_str())
+            })
+            .collect::<Vec<_>>();
+        read_chunks(v, args.buffer_size)
     };
 
     // Counting happens in this thread.
@@ -235,7 +252,7 @@ mod tests {
 
     proptest! {
         #![proptest_config(ProptestConfig {
-            cases: 1 << 15,
+            cases: 1 << 16,
             .. ProptestConfig::default()
         })]
 
