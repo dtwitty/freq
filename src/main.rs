@@ -154,13 +154,19 @@ impl NeedleCounter {
     }
 }
 
-fn first_possible_prefix(needle: &[u8], buf: &[u8]) -> usize {
-    for i in memchr_iter(needle[0], buf) {
-        if needle.starts_with(&buf[i..]) {
-            return i;
+pub fn first_possible_prefix(needle: &[u8], buf: &[u8]) -> usize {
+    const N: usize = 16;
+    let mut m = buf.len();
+    for i in 0..buf.len() {
+        if buf[i..]
+            .chunks(N)
+            .zip(needle.chunks(N))
+            .all(|(x, y)| x.iter().zip(y).fold(true, |acc, (a, b)| acc & (a == b)))
+        {
+            m = m.min(i);
         }
     }
-    buf.len()
+    m
 }
 
 fn get_uninit_vec<T>(len: usize) -> Vec<T> {
