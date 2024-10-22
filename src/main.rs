@@ -109,12 +109,13 @@ impl NeedleCounter {
     // Returns the largest index `i` such that `buf[..i]` does not contain any needles.
     fn find_in(&mut self, buf: &[u8]) -> usize {
         let n = self.needle.len();
-        let mut l = self.tmp_buf.len().saturating_sub(n - 1);
-        for i in self.finder.find_iter(buf) {
+        let mut x = 0;
+        while let Some(i) = self.finder.find(&buf[x..]) {
             self.count += 1;
-            l = l.max(i + n);
+            x += i + n;
         }
 
+        let l = self.tmp_buf.len().saturating_sub(n - 1).max(x);
         first_possible_prefix(&self.needle, &buf[l..]) + l
     }
 
