@@ -77,11 +77,11 @@ impl NeedleCounter {
 
         if !self.tmp_buf.is_empty() {
             // Add into the tmp buffer until it is at most 2 * n - 1 bytes long.
-            let num_bytes_from_buf = (2 * n - 1)
+            let y_len = (2 * n - 1)
                 .saturating_sub(self.tmp_buf.len())
                 .min(buf.len());
-            let y = &buf[..num_bytes_from_buf];
-            num_buf_bytes = y.len();
+            let y = &buf[..y_len];
+            num_buf_bytes = y_len;
             self.tmp_buf.extend(y);
 
             // Check for a needle in the tmp buffer.
@@ -123,14 +123,15 @@ impl NeedleCounter {
     // Returns the largest index `i` such that `tmp_buf[..i]` does not contain any needles.
     fn find_in_tmp_buf(&mut self) -> usize {
         let n = self.needle.len();
-        let mut l = self.tmp_buf.len().saturating_sub(n - 1);
+        let mut x = 0;
 
         // The tmp buf, by construction, contains at most one needle.
         if let Some(i) = self.finder.find(&self.tmp_buf) {
             self.count += 1;
-            l = l.max(i + n);
+            x = i + n;
         }
 
+        let l = self.tmp_buf.len().saturating_sub(n - 1).max(x);
         first_possible_prefix(&self.needle, &self.tmp_buf[l..]) + l
     }
 }
