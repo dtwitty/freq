@@ -3,7 +3,6 @@ extern crate core;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser};
 use crossbeam_channel::Receiver;
-use memchr::memchr_iter;
 use memchr::memmem::Finder;
 use std::ffi::OsString;
 use std::fs::File;
@@ -78,11 +77,11 @@ impl NeedleCounter {
 
         if !self.tmp_buf.is_empty() {
             // Add into the tmp buffer until it is at most 2 * n - 1 bytes long.
-            let x_len = self.tmp_buf.len();
-            let num_buf_bytes_left = buf.len();
-            let y_len = (2 * n - 1).saturating_sub(x_len).min(num_buf_bytes_left);
-            let y = &buf[..y_len];
-            num_buf_bytes += y.len();
+            let num_bytes_from_buf = (2 * n - 1)
+                .saturating_sub(self.tmp_buf.len())
+                .min(buf.len());
+            let y = &buf[..num_bytes_from_buf];
+            num_buf_bytes = y.len();
             self.tmp_buf.extend(y);
 
             // Check for a needle in the tmp buffer.
@@ -107,47 +106,28 @@ impl NeedleCounter {
     }
 
     // Count needles in the buffer.
-    // Returns the largest index i such that buf[..i] does not contain any needles.
+    // Returns the largest index `i` such that `buf[..i]` does not contain any needles.
     fn find_in(&mut self, buf: &[u8]) -> usize {
-        if buf.len() < self.needle.len() {
-            return 0;
-        }
-
         let n = self.needle.len();
-        let mut x = buf.len() - n + 1;
+        let mut l = self.tmp_buf.len().saturating_sub(n - 1);
         for i in self.finder.find_iter(buf) {
             self.count += 1;
-            x = x.max(i + n);
+            l = l.max(i + n);
         }
 
-        first_possible_prefix(&self.needle, &buf[x..]) + x
+        first_possible_prefix(&self.needle, &buf[l..]) + l
     }
 
     // Count needles in the temporary buffer, exploiting its construction.
-    // Returns the largest index i such that tmp_buf[..i] does not contain any needles.
+    // Returns the largest index `i` such that `tmp_buf[..i]` does not contain any needles.
     fn find_in_tmp_buf(&mut self) -> usize {
-        // Here we can take advantage of the fact that the tmp buffer is at most 2 * n - 1 bytes long.
-        // It follows:
-        //  - The tmp buffer contains at most one needle.
-        //  - That needle must be in the first (t - n) bytes of the tmp buffer.
         let n = self.needle.len();
         let mut l = self.tmp_buf.len().saturating_sub(n - 1);
 
-        if self.tmp_buf.len() < n {
-            return first_possible_prefix(&self.needle, &self.tmp_buf);
-        }
-
-        // We use memchr instead of the finder here because the tmp buf isn't very large.
-        for i in memchr_iter(self.needle[0], &self.tmp_buf[..l]) {
-            if self.tmp_buf[i..].starts_with(&self.needle) {
-                // We found a needle!
-                self.count += 1;
-
-                // We can skip to the next possible needle.
-                // The next loop will handle that.
-                l = l.max(i + n);
-                break;
-            }
+        // The tmp buf, by construction, contains at most one needle.
+        if let Some(i) = self.finder.find(&self.tmp_buf) {
+            self.count += 1;
+            l = l.max(i + n);
         }
 
         first_possible_prefix(&self.needle, &self.tmp_buf[l..]) + l
