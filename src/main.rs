@@ -86,7 +86,8 @@ impl NeedleCounter {
 
             // Check for a needle in the tmp buffer.
             // This will also count the needle if it is there.
-            let cut = self.find_in_tmp_buf();
+            let (cut, c) = self.find_in(&self.tmp_buf);
+            self.count += c;
 
             // Remove any bytes that are before the next needle.
             self.tmp_buf.drain(..cut);
@@ -99,40 +100,29 @@ impl NeedleCounter {
         num_buf_bytes -= self.tmp_buf.len();
         self.tmp_buf.clear();
         // Now we can search the rest of the new buffer for the needle.
-        let next_buffer_cut = self.find_in(&buf[num_buf_bytes..]) + num_buf_bytes;
+        let (mut next_buffer_cut, c) = self.find_in(&buf[num_buf_bytes..]);
+        self.count += c;
+        next_buffer_cut += num_buf_bytes;
 
         // Move the rest of the buffer to the temporary buffer.
         self.tmp_buf.extend(&buf[next_buffer_cut..]);
     }
 
     // Count needles in the buffer.
-    // Returns the largest index `i` such that `buf[..i]` does not contain any needles.
-    fn find_in(&mut self, buf: &[u8]) -> usize {
+    // Returns (i, c) where `i` is the largest index such that `buf[..i]` does not contain any
+    // needles, and `c` is the number of needles found.
+    fn find_in(&self, buf: &[u8]) -> (usize, usize) {
         let n = self.needle.len();
         let mut x = 0;
+        let mut count = 0;
         while let Some(i) = self.finder.find(&buf[x..]) {
-            self.count += 1;
+            count += 1;
             x += i + n;
         }
 
         let l = buf.len().saturating_sub(n - 1).max(x);
-        first_possible_prefix(&self.needle, &buf[l..]) + l
-    }
-
-    // Count needles in the temporary buffer, exploiting its construction.
-    // Returns the largest index `i` such that `tmp_buf[..i]` does not contain any needles.
-    fn find_in_tmp_buf(&mut self) -> usize {
-        let n = self.needle.len();
-        let mut x = 0;
-
-        // The tmp buf, by construction, contains at most one needle.
-        if let Some(i) = self.finder.find(&self.tmp_buf) {
-            self.count += 1;
-            x = i + n;
-        }
-
-        let l = self.tmp_buf.len().saturating_sub(n - 1).max(x);
-        first_possible_prefix(&self.needle, &self.tmp_buf[l..]) + l
+        let i = first_possible_prefix(&self.needle, &buf[l..]) + l;
+        (i, count)
     }
 }
 
