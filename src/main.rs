@@ -59,28 +59,29 @@ impl NeedleCounter {
         self.count
     }
 
-    fn write(&mut self, buf: Vec<u8>) {
+    fn write(&mut self, buf: &[u8]) {
+        if buf.is_empty() {
+            return;
+        }
+
         let n = self.needle.len();
 
         // Fast case - if the needle has length 1 we can use a simd loop.
         if n == 1 {
             let b = self.needle[0];
-            self.count += buf.iter().filter(|&&x| x == b).count();
+            self.count += bytecount::count(&buf, b);
             return;
         }
-
-        // How many bytes we need to remove from the tmp buffer to get into the new buffer.
-        let mut to_remove = self.tmp_buf.len();
 
         // The number of bytes in the buffer that we have moved to the tmp buffer.
         let mut num_buf_bytes = 0;
 
-        while to_remove > 0 && num_buf_bytes < buf.len() {
+        if !self.tmp_buf.is_empty() {
             // Add into the tmp buffer until it is at most 2 * n - 1 bytes long.
             let x_len = self.tmp_buf.len();
-            let num_buf_bytes_left = buf.len() - num_buf_bytes;
+            let num_buf_bytes_left = buf.len();
             let y_len = (2 * n - 1).saturating_sub(x_len).min(num_buf_bytes_left);
-            let y = &buf[num_buf_bytes..num_buf_bytes + y_len];
+            let y = &buf[..y_len];
             num_buf_bytes += y.len();
             self.tmp_buf.extend(y);
 
@@ -90,7 +91,6 @@ impl NeedleCounter {
 
             // Remove any bytes that are before the next needle.
             self.tmp_buf.drain(..cut);
-            to_remove = to_remove.saturating_sub(cut);
         }
 
         if num_buf_bytes == buf.len() {
@@ -228,7 +228,7 @@ fn main() {
     // Counting happens in this thread.
     let mut counter = NeedleCounter::new(needle);
     while let Ok(v) = r.recv() {
-        counter.write(v);
+        counter.write(&v);
     }
     println!("{}", counter.count());
 }
@@ -257,7 +257,7 @@ mod tests {
             let mut counter = NeedleCounter::new(&needle);
 
             haystack.chunks(chunk_size).for_each(|chunk| {
-                counter.write(chunk.to_vec());
+                counter.write(chunk);
             });
 
 
@@ -274,7 +274,7 @@ mod tests {
             let mut counter = NeedleCounter::new(&needle);
 
             haystack.chunks(chunk_size).for_each(|chunk| {
-                counter.write(chunk.to_vec());
+                counter.write(chunk);
             });
 
 

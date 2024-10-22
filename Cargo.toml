@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bytecount = { version = "0.6.8", features = ["runtime-dispatch-simd"] }
 clap = { version = "4.5.20", features = ["derive"] }
 crossbeam-channel = "0.5.13"
 itertools = "0.13.0"
