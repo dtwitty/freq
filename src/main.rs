@@ -135,15 +135,9 @@ impl NeedleCounter {
 }
 
 pub fn first_possible_prefix(needle: &[u8], buf: &[u8]) -> usize {
-    const N: usize = 16;
     (0..buf.len())
-        .filter(|&i| {
-            buf[i..]
-                .chunks(N)
-                .zip(needle.chunks(N))
-                .all(|(x, y)| x.iter().zip(y).fold(true, |acc, (a, b)| acc & (a == b)))
-        })
-        .min()
+        .filter(|&i| needle.starts_with(&buf[i..]))
+        .next()
         .unwrap_or(buf.len())
 }
 
