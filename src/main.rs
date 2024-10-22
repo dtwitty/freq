@@ -115,7 +115,7 @@ impl NeedleCounter {
             x += i + n;
         }
 
-        let l = self.tmp_buf.len().saturating_sub(n - 1).max(x);
+        let l = buf.len().saturating_sub(n - 1).max(x);
         first_possible_prefix(&self.needle, &buf[l..]) + l
     }
 
