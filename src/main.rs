@@ -141,27 +141,25 @@ fn get_uninit_vec<T>(len: usize) -> Vec<T> {
     v
 }
 
-fn read_chunks<R: Read + Send + 'static>(mut v: Vec<R>, chunk_size: usize) -> Receiver<Vec<u8>> {
+fn read_chunks<R: Read + Send + 'static>(mut f: R, chunk_size: usize) -> Receiver<Vec<u8>> {
     let (s, r) = crossbeam_channel::bounded(1);
     std::thread::spawn(move || {
-        v.iter_mut().for_each(|f| {
-            loop {
-                // Get a buffer.
-                let mut v = get_uninit_vec(chunk_size);
+        loop {
+            // Get a buffer.
+            let mut v = get_uninit_vec(chunk_size);
 
-                // Try to fill the buffer.
-                let bytes_read = f.read(&mut v).expect("failed to read");
+            // Try to fill the buffer.
+            let bytes_read = f.read(&mut v).expect("failed to read");
 
-                // If we read 0 bytes, we are done.
-                if bytes_read == 0 {
-                    break;
-                }
-
-                // Send the buffer.
-                v.truncate(bytes_read);
-                s.send(v).expect("failed to send");
+            // If we read 0 bytes, we are done.
+            if bytes_read == 0 {
+                break;
             }
-        });
+
+            // Send the buffer.
+            v.truncate(bytes_read);
+            s.send(v).expect("failed to send");
+        }
         // Sender drops.
     });
     r
@@ -177,26 +175,30 @@ fn main() {
             .exit();
     }
 
-    let r = if args.input.is_empty() {
-        let stdin = stdin();
-        read_chunks(vec![stdin], args.buffer_size)
+    let v: Vec<Box<dyn Read + Send + 'static>> = if args.input.is_empty() {
+        vec![Box::new(stdin())]
     } else {
-        let v = args
+        args
             .input
             .iter()
             .map(|p| {
                 File::open(p.clone()).expect(format!("failed to open {}", p.display()).as_str())
             })
-            .collect::<Vec<_>>();
-        read_chunks(v, args.buffer_size)
+            .map(|f| Box::new(f) as _)
+            .collect()
     };
 
     // Counting happens in this thread.
-    let mut counter = NeedleCounter::new(needle);
-    while let Ok(v) = r.recv() {
-        counter.write(&v);
+    let mut total_count = 0;
+    for f in v {
+        let r = read_chunks(f, args.buffer_size);
+        let mut counter = NeedleCounter::new(needle);
+        while let Ok(v) = r.recv() {
+            counter.write(&v);
+        }
+        total_count += counter.count();
     }
-    println!("{}", counter.count());
+    println!("{}", total_count);
 }
 
 #[cfg(test)]
