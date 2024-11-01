@@ -142,7 +142,7 @@ fn get_uninit_vec<T>(len: usize) -> Vec<T> {
 }
 
 fn read_chunks<R: Read + Send + 'static>(mut f: R, chunk_size: usize) -> Receiver<Vec<u8>> {
-    let (s, r) = crossbeam_channel::bounded(1);
+    let (s, r) = crossbeam_channel::bounded(0);
     std::thread::spawn(move || {
         loop {
             // Get a buffer.
